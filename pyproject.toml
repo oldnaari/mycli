@@ -10,9 +10,11 @@ requires-python = ">=3.9"
 dependencies = [
     "rich",
     "textual>=0.80",
+    "paramiko",
 ]
 
 [project.scripts]
 deepest-path = "mycli.deepest_path:main"
 slurm-monitor = "mycli.slurm_monitor:main"
 slurm-notifier = "mycli.slurm_notifier:main"
+download-remote-dir = "mycli.download_remote_dir:main"
