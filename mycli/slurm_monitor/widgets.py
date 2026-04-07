@@ -1,0 +1,212 @@
+"""TUI widgets for the slurm monitor."""
+
+from rich.text import Text
+from textual.reactive import reactive
+from textual.widget import Widget
+from textual.widgets import Static
+
+from .colors import (
+    ANSI_BLACK, ANSI_BLUE, ANSI_BRIGHT_BLACK, ANSI_BRIGHT_WHITE, ANSI_RED,
+    BLOCK, gpu_color, gpu_style, node_sort_key, node_style, render_vram_bar,
+)
+from .data import ClusterState, NodeInfo
+
+
+class PriorityWidget(Static):
+    """Non-interactive priority jobs display."""
+
+    def render_content(self, state: ClusterState, width: int) -> Text:
+        text = Text()
+        label = Text(" PRIORITY", style=f"bold on {ANSI_BRIGHT_BLACK}")
+        label.pad_right(width)
+        text.append_text(label)
+        text.append("\n")
+
+        for job in state.pending_jobs[:15]:
+            col1 = f"{job.partition} [N-{job.num_nodes} G-{job.gpu_count}]"
+            col2 = job.user
+            gap = max(1, width - len(col1) - len(col2) - 2)
+            line = Text()
+            line.append(" " + col1, style=ANSI_BRIGHT_WHITE)
+            line.append(" " * gap)
+            line.append(col2 + " ", style=ANSI_BRIGHT_WHITE)
+            text.append_text(line)
+            text.append("\n")
+
+        return text
+
+
+class NodeListWidget(Widget, can_focus=True):
+    """Interactive node list with GPU blocks."""
+
+    selected: reactive[int] = reactive(0)
+    scroll_offset: reactive[int] = reactive(0)
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.sorted_nodes: list[NodeInfo] = []
+        self.current_user: str = ""
+        self.filter_mode: str = ""
+        self.filter_text: str = ""
+
+    def update_nodes(self, state: ClusterState):
+        self.current_user = state.current_user
+        all_nodes = list(state.nodes.values())
+        filtered = all_nodes
+        if self.filter_text:
+            if self.filter_mode == "user":
+                filtered = [n for n in all_nodes
+                            if any(self.filter_text.lower() in (j.user or "").lower()
+                                   for j in n.jobs)]
+            elif self.filter_mode == "node":
+                filtered = [n for n in all_nodes
+                            if self.filter_text.lower() in n.name.lower()]
+        filtered.sort(key=lambda n: node_sort_key(n, state.current_user))
+        self.sorted_nodes = filtered
+        if self.selected >= len(self.sorted_nodes):
+            self.selected = max(0, len(self.sorted_nodes) - 1)
+        self.refresh()
+
+    def get_selected_node(self) -> NodeInfo | None:
+        if 0 <= self.selected < len(self.sorted_nodes):
+            return self.sorted_nodes[self.selected]
+        return None
+
+    def render(self) -> Text:
+        width = self.size.width
+        text = Text()
+
+        label = Text(" LIST OF NODES", style=f"bold on {ANSI_BRIGHT_BLACK}")
+        label.pad_right(width)
+        text.append_text(label)
+        text.append("\n")
+
+        if not self.sorted_nodes:
+            text.append("  No nodes", style=ANSI_BRIGHT_BLACK)
+            return text
+
+        visible_height = max(1, self.size.height - 2)
+        if self.selected < self.scroll_offset:
+            self.scroll_offset = self.selected
+        elif self.selected >= self.scroll_offset + visible_height:
+            self.scroll_offset = self.selected - visible_height + 1
+
+        max_name = max(len(n.name) for n in self.sorted_nodes) if self.sorted_nodes else 8
+        max_type = max(len(n.gpu_type) for n in self.sorted_nodes) if self.sorted_nodes else 0
+        max_gpus = max(n.total_gpus for n in self.sorted_nodes) if self.sorted_nodes else 4
+
+        end = min(self.scroll_offset + visible_height, len(self.sorted_nodes))
+        for i in range(self.scroll_offset, end):
+            node = self.sorted_nodes[i]
+            is_selected = (i == self.selected)
+            bg = f" on {ANSI_BLACK}" if is_selected else ""
+
+            nc = node_style(node, self.current_user)
+            blocks = Text()
+            for gpu in node.gpus:
+                gc = gpu_style(gpu, self.current_user)
+                blocks.append(BLOCK, style=gc + bg)
+
+            pad_blocks = max_gpus - len(node.gpus)
+            if pad_blocks > 0:
+                blocks.append(" " * pad_blocks, style=bg if bg else "")
+
+            COL_GAP = "    "  # 4 spaces between columns
+            type_str = node.gpu_type.ljust(max_type) if max_type > 0 else ""
+            type_col_width = (max_type + len(COL_GAP)) if max_type > 0 else 0
+            name_pad = max_name - len(node.name)
+            content_width = 1 + name_pad + len(node.name) + len(COL_GAP) + type_col_width + max_gpus
+            left_pad = max(0, width - content_width - 1)
+            line = Text()
+            line.append(" " * left_pad, style=bg if bg else "")
+            line.append(" " * name_pad, style=bg if bg else "")
+            line.append(node.name, style=nc + bg)
+            line.append(COL_GAP, style=bg if bg else "")
+            if type_str:
+                line.append(type_str, style=ANSI_BRIGHT_BLACK + bg)
+                line.append(COL_GAP, style=bg if bg else "")
+            line.append_text(blocks)
+            # Fill to full width for selected-line background
+            used = left_pad + name_pad + len(node.name) + len(COL_GAP) + type_col_width + len(node.gpus) + pad_blocks
+            remaining = max(0, width - used)
+            line.append(" " * remaining, style=bg if bg else "")
+            text.append_text(line)
+            if i < end - 1:
+                text.append("\n")
+
+        return text
+
+    def move_up(self):
+        if self.selected > 0:
+            self.selected -= 1
+            self.refresh()
+
+    def move_down(self):
+        if self.selected < len(self.sorted_nodes) - 1:
+            self.selected += 1
+            self.refresh()
+
+
+class NodeDetailWidget(Static):
+    """Right panel showing GPU details for selected node."""
+
+    def render_detail(self, node: NodeInfo | None, current_user: str) -> Text:
+        text = Text()
+        if node is None:
+            text.append("No node selected", style=ANSI_BRIGHT_BLACK)
+            return text
+
+        text.append(f" {node.name}", style="bold")
+        text.append(f"  ({node.state})\n", style=ANSI_BRIGHT_BLACK)
+        text.append("\n")
+
+        max_user = max((len(gpu.user or "free") for gpu in node.gpus), default=4)
+
+        for gpu in node.gpus:
+            gc_name = gpu_color(gpu, current_user)
+            gc = gpu_style(gpu, current_user)
+            user_str = gpu.user or "free"
+            is_bold = gpu.user == current_user
+            style_prefix = "bold " if is_bold else ""
+
+            line = Text()
+            line.append(f" GPU {gpu.index}: ", style=ANSI_BRIGHT_BLACK)
+            line.append(user_str.ljust(max_user), style=style_prefix + gc)
+
+            if gpu.mem_total > 0:
+                pct = gpu.mem_used / gpu.mem_total
+                line.append("  ")
+                line.append_text(render_vram_bar(pct, gc_name))
+            elif gpu.is_drained:
+                line.append("  DRAINED", style=f"{ANSI_RED} dim")
+            else:
+                line.append("  ", style=ANSI_BRIGHT_BLACK)
+                line.append_text(render_vram_bar(0.0, gc_name))
+
+            text.append_text(line)
+            text.append("\n")
+
+        return text
+
+
+class StatusBarWidget(Static):
+    """Status bar at bottom — shows commands or search input."""
+
+    DEFAULT_CSS = """
+    StatusBarWidget {
+        height: 1;
+    }
+    """
+
+    def render_commands(self, filter_mode: str = "", filter_text: str = "") -> Text:
+        if filter_mode:
+            label = "user" if filter_mode == "user" else "node"
+            t = Text(style=f"{ANSI_BLUE} on {ANSI_BRIGHT_BLACK}")
+            t.append(f" Filter by {label}: {filter_text}\u2588")
+            t.pad_right(200)
+            return t
+
+        t = Text(style=f"{ANSI_BLUE} on {ANSI_BRIGHT_BLACK}")
+        t.append(" j/k:navigate  u/?:filter user  n//:filter node  q:quit")
+        t.pad_right(200)
+        return t
