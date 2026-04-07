@@ -3,7 +3,6 @@
 import os
 import sys
 import threading
-import time
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -48,10 +47,6 @@ class SlurmMonitorApp(App):
     }
     """
 
-    BINDINGS = [
-        Binding("q", "quit", "Quit", show=False),
-    ]
-
     def __init__(self, demo: bool = False, **kw):
         super().__init__(**kw)
         self.demo = demo
@@ -59,6 +54,8 @@ class SlurmMonitorApp(App):
         self.filter_mode: str = ""
         self.filter_text: str = ""
         self._stop_event = threading.Event()
+        self._dirty = False
+        self._filter_dirty = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="main-area"):
@@ -76,16 +73,37 @@ class SlurmMonitorApp(App):
             self.cluster_state = build_demo_state()
             self.update_all()
         else:
+            # Timer polls for dirty flag — only way background data reaches the UI
+            self.set_interval(2, self._check_dirty)
             # Slurm refresh thread (sinfo + squeue every 30s)
             t1 = threading.Thread(target=self._slurm_refresh_loop, daemon=True)
             t1.start()
             # GPU poll thread (nvidia-smi continuously)
             t2 = threading.Thread(target=self._gpu_poll_loop, daemon=True)
             t2.start()
+        # Fast timer for filter debounce (always active)
+        self.set_interval(0.2, self._check_filter_dirty)
         self.query_one("#node-list", NodeListWidget).focus()
 
     def on_unmount(self) -> None:
         self._stop_event.set()
+
+    def _check_dirty(self) -> None:
+        """Timer callback: re-render UI if background threads have new data."""
+        if self._dirty:
+            self._dirty = False
+            self.update_all()
+
+    def _check_filter_dirty(self) -> None:
+        """Fast timer: apply pending filter changes."""
+        if self._filter_dirty:
+            self._filter_dirty = False
+            nl = self.query_one("#node-list", NodeListWidget)
+            nl.filter_text = self.filter_text
+            nl.filter_mode = self.filter_mode
+            if self.cluster_state:
+                nl.update_nodes(self.cluster_state)
+            self.update_detail()
 
     def _slurm_refresh_loop(self) -> None:
         """Background thread: periodically refresh sinfo + squeue."""
@@ -93,15 +111,13 @@ class SlurmMonitorApp(App):
             try:
                 state = refresh_slurm_state(self.current_user)
                 self.cluster_state = state
-                self.call_from_thread(self.update_all)
+                self._dirty = True
             except Exception:
                 pass
             self._stop_event.wait(30)
 
     def _gpu_poll_loop(self) -> None:
         """Background thread: continuously cycle through nodes fetching nvidia-smi."""
-        last_ui_update = 0.0
-        dirty = False
         while not self._stop_event.is_set():
             state = self.cluster_state
             if state is None or not state.nodes:
@@ -117,20 +133,9 @@ class SlurmMonitorApp(App):
                     name, output = fetch_nvidia_smi(node_name)
                     if output is not None and self.cluster_state is not None:
                         apply_nvidia_smi(self.cluster_state, name, output)
-                        dirty = True
+                        self._dirty = True
                 except Exception:
                     pass
-                # Throttle UI updates to at most once per second
-                now = time.monotonic()
-                if dirty and now - last_ui_update >= 1.0:
-                    self.call_from_thread(self.update_all)
-                    last_ui_update = now
-                    dirty = False
-            # Flush any remaining changes at end of cycle
-            if dirty:
-                self.call_from_thread(self.update_all)
-                last_ui_update = time.monotonic()
-                dirty = False
 
     def _compute_left_width(self, state: ClusterState) -> int:
         nodes = list(state.nodes.values())
@@ -185,13 +190,8 @@ class SlurmMonitorApp(App):
             if event.key == "escape":
                 self.filter_mode = ""
                 self.filter_text = ""
-                nl = self.query_one("#node-list", NodeListWidget)
-                nl.filter_mode = ""
-                nl.filter_text = ""
-                if self.cluster_state:
-                    nl.update_nodes(self.cluster_state)
+                self._filter_dirty = True
                 self.update_status()
-                self.update_detail()
                 event.prevent_default()
                 return
             if event.key == "enter":
@@ -203,12 +203,9 @@ class SlurmMonitorApp(App):
                 self.filter_text = self.filter_text[:-1]
             elif event.is_printable and event.character:
                 self.filter_text += event.character
-            nl = self.query_one("#node-list", NodeListWidget)
-            nl.filter_text = self.filter_text
-            if self.cluster_state:
-                nl.update_nodes(self.cluster_state)
+            # Only update status bar immediately; filter applied by debounce timer
+            self._filter_dirty = True
             self.update_status()
-            self.update_detail()
             event.prevent_default()
             return
 
@@ -225,16 +222,15 @@ class SlurmMonitorApp(App):
         elif event.key in ("u", "question_mark"):
             self.filter_mode = "user"
             self.filter_text = ""
-            nl.filter_mode = "user"
-            nl.filter_text = ""
             self.update_status()
             event.prevent_default()
         elif event.key in ("n", "slash"):
             self.filter_mode = "node"
             self.filter_text = ""
-            nl.filter_mode = "node"
-            nl.filter_text = ""
             self.update_status()
+            event.prevent_default()
+        elif event.key == "q":
+            self.exit()
             event.prevent_default()
 
 
