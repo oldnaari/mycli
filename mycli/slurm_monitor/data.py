@@ -4,6 +4,7 @@ import re
 import subprocess
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime
 
 
 # ---------------------------------------------------------------------------
@@ -18,6 +19,7 @@ class GpuInfo:
     mem_used: int = 0
     mem_total: int = 0
     is_drained: bool = False
+    start_time: datetime | None = None
 
 
 @dataclass
@@ -30,6 +32,7 @@ class JobInfo:
     state: str = ""
     priority: int = 0
     num_nodes: int = 1
+    start_time: datetime | None = None
 
 
 @dataclass
@@ -93,18 +96,24 @@ def parse_squeue(output: str) -> list[JobInfo]:
     jobs: list[JobInfo] = []
     for line in output.strip().splitlines():
         parts = line.split()
-        if len(parts) < 8:
+        if len(parts) < 9:
             continue
-        job_id, user, partition, nodelist, tres, state, priority, num_nodes = parts[:8]
+        job_id, user, partition, nodelist, tres, state, priority, num_nodes, start = parts[:9]
         gpu_count = 0
         m = re.search(r"gpu(?::[^:,(]+)*:(\d+)", tres)
         if m:
             gpu_count = int(m.group(1))
+        start_time = None
+        try:
+            start_time = datetime.strptime(start, "%Y-%m-%dT%H:%M:%S")
+        except (ValueError, TypeError):
+            pass
         jobs.append(JobInfo(
             job_id=job_id, user=user, partition=partition,
             nodes=[nodelist], gpu_count=gpu_count, state=state.upper(),
             priority=int(priority) if priority.isdigit() else 0,
             num_nodes=int(num_nodes) if num_nodes.isdigit() else 1,
+            start_time=start_time,
         ))
     return jobs
 
@@ -173,7 +182,7 @@ def apply_nvidia_smi(state: ClusterState, node_name: str, output: str) -> None:
 def refresh_slurm_state(current_user: str) -> ClusterState:
     """Fetch sinfo + squeue and build cluster state. No nvidia-smi."""
     sinfo_out = run_cmd("sinfo -N -o '%N %T %G' --noheader")
-    squeue_out = run_cmd("squeue -o '%i %u %P %N %b %T %Q %D' --noheader")
+    squeue_out = run_cmd("squeue -o '%i %u %P %N %b %T %Q %D %S' --noheader")
 
     nodes = parse_sinfo(sinfo_out)
     all_jobs = parse_squeue(squeue_out)
@@ -202,6 +211,7 @@ def refresh_slurm_state(current_user: str) -> ClusterState:
             for _ in range(job.gpu_count):
                 if idx < len(node.gpus):
                     node.gpus[idx].user = job.user
+                    node.gpus[idx].start_time = job.start_time
                     idx += 1
 
     pending_jobs.sort(key=lambda j: j.priority, reverse=True)

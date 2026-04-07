@@ -1,9 +1,27 @@
 """TUI widgets for the slurm monitor."""
 
+from datetime import datetime
+
 from rich.text import Text
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Static
+
+
+def _format_duration(start: datetime | None) -> str:
+    if start is None:
+        return ""
+    delta = datetime.now() - start
+    total_minutes = int(delta.total_seconds()) // 60
+    if total_minutes < 60:
+        return f"{total_minutes}m"
+    hours = total_minutes // 60
+    mins = total_minutes % 60
+    if hours < 24:
+        return f"{hours}h{mins:02d}m"
+    days = hours // 24
+    hours = hours % 24
+    return f"{days}d{hours:02d}h{mins:02d}m"
 
 from .colors import (
     ANSI_BLACK, ANSI_BLUE, ANSI_BRIGHT_BLACK, ANSI_BRIGHT_WHITE, ANSI_RED,
@@ -79,13 +97,13 @@ class NodeListWidget(Widget, can_focus=True):
         label = Text(" LIST OF NODES", style=f"bold on {ANSI_BRIGHT_BLACK}")
         label.pad_right(width)
         text.append_text(label)
-        text.append("\n")
+        text.append("\n\n")
 
         if not self.sorted_nodes:
             text.append("  No nodes", style=ANSI_BRIGHT_BLACK)
             return text
 
-        visible_height = max(1, self.size.height - 2)
+        visible_height = max(1, self.size.height - 3)
         if self.selected < self.scroll_offset:
             self.scroll_offset = self.selected
         elif self.selected >= self.scroll_offset + visible_height:
@@ -137,14 +155,16 @@ class NodeListWidget(Widget, can_focus=True):
         return text
 
     def move_up(self):
-        if self.selected > 0:
-            self.selected -= 1
-            self.refresh()
+        if not self.sorted_nodes:
+            return
+        self.selected = (self.selected - 1) % len(self.sorted_nodes)
+        self.refresh()
 
     def move_down(self):
-        if self.selected < len(self.sorted_nodes) - 1:
-            self.selected += 1
-            self.refresh()
+        if not self.sorted_nodes:
+            return
+        self.selected = (self.selected + 1) % len(self.sorted_nodes)
+        self.refresh()
 
 
 class NodeDetailWidget(Static):
@@ -182,6 +202,10 @@ class NodeDetailWidget(Static):
             else:
                 line.append("  ", style=ANSI_BRIGHT_BLACK)
                 line.append_text(render_vram_bar(0.0, gc_name))
+
+            duration = _format_duration(gpu.start_time)
+            if duration:
+                line.append(f"  {duration}", style=gc)
 
             text.append_text(line)
             text.append("\n")
