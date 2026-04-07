@@ -24,7 +24,7 @@ def _format_duration(start: datetime | None) -> str:
     return f"{days}d{hours:02d}h{mins:02d}m"
 
 from .colors import (
-    ANSI_BLACK, ANSI_BLUE, ANSI_BRIGHT_BLACK, ANSI_BRIGHT_WHITE, ANSI_RED,
+    ANSI_BLACK, ANSI_BLUE, ANSI_BRIGHT_BLACK, ANSI_BRIGHT_WHITE, ANSI_RED, ANSI_WHITE,
     BLOCK, gpu_color, gpu_style, node_sort_key, node_style, render_vram_bar,
 )
 from .data import ClusterState, NodeInfo
@@ -144,10 +144,14 @@ class NodeListWidget(Widget, can_focus=True):
                 line.append(type_str, style=ANSI_BRIGHT_BLACK + bg)
                 line.append(COL_GAP, style=bg if bg else "")
             line.append_text(blocks)
-            # Fill to full width for selected-line background
+            # Fill to full width for selected-line background, leave room for slab
             used = left_pad + name_pad + len(node.name) + len(COL_GAP) + type_col_width + len(node.gpus) + pad_blocks
-            remaining = max(0, width - used)
+            remaining = max(0, width - used - 1)
             line.append(" " * remaining, style=bg if bg else "")
+            if is_selected:
+                line.append("\u2590", style=f"{ANSI_WHITE} on {ANSI_BLACK}")
+            else:
+                line.append(" ")
             text.append_text(line)
             if i < end - 1:
                 text.append("\n")
@@ -164,6 +168,18 @@ class NodeListWidget(Widget, can_focus=True):
         if not self.sorted_nodes:
             return
         self.selected = (self.selected + 1) % len(self.sorted_nodes)
+        self.refresh()
+
+    def move_first(self):
+        if not self.sorted_nodes:
+            return
+        self.selected = 0
+        self.refresh()
+
+    def move_last(self):
+        if not self.sorted_nodes:
+            return
+        self.selected = len(self.sorted_nodes) - 1
         self.refresh()
 
 
@@ -213,6 +229,35 @@ class NodeDetailWidget(Static):
         return text
 
 
+class ShortcutsWidget(Static):
+    """Fixed shortcuts help at the bottom of the right panel."""
+
+    SHORTCUTS = [
+        ("gg", "go to top"),
+        ("G", "go to bottom"),
+        ("j \u2193", "move down"),
+        ("k \u2191", "move up"),
+        ("/ n", "search node"),
+        ("? u", "search user"),
+        ("esc", "clear filter"),
+        ("q", "quit"),
+    ]
+
+    def render_shortcuts(self, has_filter: bool = False) -> Text:
+        shortcuts = [(k, d) for k, d in self.SHORTCUTS
+                     if k != "esc" or has_filter]
+        max_key = max((len(k) for k, _ in shortcuts), default=3)
+        text = Text()
+        for key, desc in shortcuts:
+            line = Text()
+            line.append(f" {key:>{max_key}s}", style=ANSI_BLUE)
+            line.append(" - ", style=ANSI_BRIGHT_BLACK)
+            line.append(desc, style=ANSI_BRIGHT_BLACK)
+            text.append_text(line)
+            text.append("\n")
+        return text
+
+
 class StatusBarWidget(Static):
     """Status bar at bottom — shows commands or search input."""
 
@@ -222,7 +267,8 @@ class StatusBarWidget(Static):
     }
     """
 
-    def render_commands(self, filter_mode: str = "", filter_text: str = "") -> Text:
+    def render_commands(self, filter_mode: str = "", filter_text: str = "",
+                        has_filter: bool = False) -> Text:
         if filter_mode:
             label = "user" if filter_mode == "user" else "node"
             t = Text(style=f"{ANSI_BLUE} on {ANSI_BRIGHT_BLACK}")
@@ -230,7 +276,8 @@ class StatusBarWidget(Static):
             t.pad_right(200)
             return t
 
-        t = Text(style=f"{ANSI_BLUE} on {ANSI_BRIGHT_BLACK}")
-        t.append(" j/k:navigate  u/?:filter user  n//:filter node  q:quit")
+        t = Text(style=f"on {ANSI_BRIGHT_BLACK}")
+        if has_filter:
+            t.append(f" filtered: {filter_text}", style=ANSI_BLUE)
         t.pad_right(200)
         return t

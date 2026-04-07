@@ -14,7 +14,7 @@ from .colors import ANSI_BRIGHT_BLACK
 from .data import apply_nvidia_smi, fetch_nvidia_smi, refresh_slurm_state, ClusterState
 from .demo import build_demo_state
 from .widgets import (
-    NodeDetailWidget, NodeListWidget, PriorityWidget, StatusBarWidget,
+    NodeDetailWidget, NodeListWidget, PriorityWidget, ShortcutsWidget, StatusBarWidget,
 )
 
 
@@ -36,8 +36,14 @@ class SlurmMonitorApp(App):
     #node-list {
         height: 1fr;
     }
-    #node-detail {
+    #right-panel {
         width: 1fr;
+    }
+    #node-detail {
+        height: 1fr;
+    }
+    #shortcuts {
+        height: auto;
     }
     #nvidia-cmd {
         height: 1;
@@ -56,13 +62,16 @@ class SlurmMonitorApp(App):
         self._stop_event = threading.Event()
         self._dirty = False
         self._filter_dirty = False
+        self._pending_g = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="main-area"):
             with Vertical(id="left-panel"):
                 yield PriorityWidget(id="priority")
                 yield NodeListWidget(id="node-list")
-            yield NodeDetailWidget(id="node-detail")
+            with Vertical(id="right-panel"):
+                yield NodeDetailWidget(id="node-detail")
+                yield ShortcutsWidget(id="shortcuts")
         yield Static(id="nvidia-cmd")
         yield StatusBarWidget(id="status-bar")
 
@@ -110,6 +119,19 @@ class SlurmMonitorApp(App):
         while not self._stop_event.is_set():
             try:
                 state = refresh_slurm_state(self.current_user)
+                # Carry over nvidia-smi data from old state
+                old = self.cluster_state
+                if old is not None:
+                    for name, node in state.nodes.items():
+                        old_node = old.nodes.get(name)
+                        if old_node is None:
+                            continue
+                        for gpu in node.gpus:
+                            if gpu.index < len(old_node.gpus):
+                                old_gpu = old_node.gpus[gpu.index]
+                                gpu.utilization = old_gpu.utilization
+                                gpu.mem_used = old_gpu.mem_used
+                                gpu.mem_total = old_gpu.mem_total
                 self.cluster_state = state
                 self._dirty = True
             except Exception:
@@ -173,6 +195,10 @@ class SlurmMonitorApp(App):
         node = nl.get_selected_node()
         nd.update(nd.render_detail(node, self.current_user))
 
+        sw = self.query_one("#shortcuts", ShortcutsWidget)
+        has_filter = bool(nl.filter_text)
+        sw.update(sw.render_shortcuts(has_filter))
+
         cmd_widget = self.query_one("#nvidia-cmd", Static)
         if node:
             t = Text(style=ANSI_BRIGHT_BLACK)
@@ -183,7 +209,9 @@ class SlurmMonitorApp(App):
 
     def update_status(self) -> None:
         sb = self.query_one("#status-bar", StatusBarWidget)
-        sb.update(sb.render_commands(self.filter_mode, self.filter_text))
+        nl = self.query_one("#node-list", NodeListWidget)
+        has_filter = bool(nl.filter_text)
+        sb.update(sb.render_commands(self.filter_mode, self.filter_text, has_filter))
 
     def on_key(self, event) -> None:
         if self.filter_mode:
@@ -211,12 +239,27 @@ class SlurmMonitorApp(App):
 
         nl = self.query_one("#node-list", NodeListWidget)
 
+        if event.key == "g":
+            if self._pending_g:
+                self._pending_g = False
+                nl.move_first()
+                self.update_detail()
+            else:
+                self._pending_g = True
+            event.prevent_default()
+            return
+        self._pending_g = False
+
         if event.key in ("j", "down"):
             nl.move_down()
             self.update_detail()
             event.prevent_default()
         elif event.key in ("k", "up"):
             nl.move_up()
+            self.update_detail()
+            event.prevent_default()
+        elif event.key == "G":
+            nl.move_last()
             self.update_detail()
             event.prevent_default()
         elif event.key in ("u", "question_mark"):
@@ -228,6 +271,16 @@ class SlurmMonitorApp(App):
             self.filter_mode = "node"
             self.filter_text = ""
             self.update_status()
+            event.prevent_default()
+        elif event.key == "escape":
+            if nl.filter_text:
+                nl.filter_text = ""
+                nl.filter_mode = ""
+                self.filter_text = ""
+                if self.cluster_state:
+                    nl.update_nodes(self.cluster_state)
+                self.update_detail()
+                self.update_status()
             event.prevent_default()
         elif event.key == "q":
             self.exit()
