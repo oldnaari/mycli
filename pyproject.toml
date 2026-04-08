@@ -15,3 +15,4 @@ dependencies = [
 [project.scripts]
 deepest-path = "mycli.deepest_path:main"
 slurm-monitor = "mycli.slurm_monitor:main"
+slurm-notifier = "mycli.slurm_notifier:main"
