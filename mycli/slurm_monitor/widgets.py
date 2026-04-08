@@ -81,6 +81,10 @@ class NodeListWidget(Widget, can_focus=True):
             elif self.filter_mode == "node":
                 filtered = [n for n in all_nodes
                             if self.filter_text.lower() in n.name.lower()]
+            elif self.filter_mode == "partition":
+                ft = self.filter_text.lower()
+                filtered = [n for n in all_nodes
+                            if ft in n.partition.lower()]
         filtered.sort(key=lambda n: node_sort_key(n, state.current_user))
         self.sorted_nodes = filtered
         if self.selected >= len(self.sorted_nodes):
@@ -259,6 +263,7 @@ class ShortcutsWidget(Static):
         ("k \u2191", "move up"),
         ("/ n", "search node"),
         ("? u", "search user"),
+        ("p", "search partition"),
         ("m", "open nvitop"),
         ("c", "copy nvitop cmd"),
         ("esc", "clear filter"),
@@ -326,7 +331,7 @@ class StatusBarWidget(Static):
     def render_commands(self, filter_mode: str = "", filter_text: str = "",
                         has_filter: bool = False) -> Text:
         if filter_mode:
-            label = "user" if filter_mode == "user" else "node"
+            label = {"user": "user", "node": "node", "partition": "partition"}.get(filter_mode, filter_mode)
             t = Text(style=f"{ANSI_BLUE} on {ANSI_BRIGHT_BLACK}")
             t.append(f" Filter by {label}: {filter_text}\u2588")
             t.pad_right(200)
