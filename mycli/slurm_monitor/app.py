@@ -256,6 +256,11 @@ class SlurmMonitorApp(App):
             self.filter_text = ""
             self._update_status()
             event.prevent_default()
+        elif event.key == "p":
+            self.filter_mode = "partition"
+            self.filter_text = ""
+            self._update_status()
+            event.prevent_default()
         elif event.key == "escape":
             if nl.filter_text:
                 nl.filter_text = ""
