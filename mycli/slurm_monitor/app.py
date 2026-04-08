@@ -1,12 +1,13 @@
 """Slurm monitor TUI application."""
 
+import base64
 import os
+import subprocess
 import sys
 import threading
 
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Static
 
@@ -45,9 +46,6 @@ class SlurmMonitorApp(App):
     #shortcuts {
         height: auto;
     }
-    #nvidia-cmd {
-        height: 1;
-    }
     #status-bar {
         height: 1;
     }
@@ -61,8 +59,8 @@ class SlurmMonitorApp(App):
         self.filter_text: str = ""
         self._stop_event = threading.Event()
         self._dirty = False
-        self._filter_dirty = False
         self._pending_g = False
+        self._left_width: int = 40
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="main-area"):
@@ -72,7 +70,6 @@ class SlurmMonitorApp(App):
             with Vertical(id="right-panel"):
                 yield NodeDetailWidget(id="node-detail")
                 yield ShortcutsWidget(id="shortcuts")
-        yield Static(id="nvidia-cmd")
         yield StatusBarWidget(id="status-bar")
 
     def on_mount(self) -> None:
@@ -82,44 +79,25 @@ class SlurmMonitorApp(App):
             self.cluster_state = build_demo_state()
             self.update_all()
         else:
-            # Timer polls for dirty flag — only way background data reaches the UI
-            self.set_interval(2, self._check_dirty)
-            # Slurm refresh thread (sinfo + squeue every 30s)
+            self.set_interval(3, self._check_dirty)
             t1 = threading.Thread(target=self._slurm_refresh_loop, daemon=True)
             t1.start()
-            # GPU poll thread (nvidia-smi continuously)
             t2 = threading.Thread(target=self._gpu_poll_loop, daemon=True)
             t2.start()
-        # Fast timer for filter debounce (always active)
-        self.set_interval(0.2, self._check_filter_dirty)
         self.query_one("#node-list", NodeListWidget).focus()
 
     def on_unmount(self) -> None:
         self._stop_event.set()
 
     def _check_dirty(self) -> None:
-        """Timer callback: re-render UI if background threads have new data."""
         if self._dirty:
             self._dirty = False
             self.update_all()
 
-    def _check_filter_dirty(self) -> None:
-        """Fast timer: apply pending filter changes."""
-        if self._filter_dirty:
-            self._filter_dirty = False
-            nl = self.query_one("#node-list", NodeListWidget)
-            nl.filter_text = self.filter_text
-            nl.filter_mode = self.filter_mode
-            if self.cluster_state:
-                nl.update_nodes(self.cluster_state)
-            self.update_detail()
-
     def _slurm_refresh_loop(self) -> None:
-        """Background thread: periodically refresh sinfo + squeue."""
         while not self._stop_event.is_set():
             try:
                 state = refresh_slurm_state(self.current_user)
-                # Carry over nvidia-smi data from old state
                 old = self.cluster_state
                 if old is not None:
                     for name, node in state.nodes.items():
@@ -139,7 +117,6 @@ class SlurmMonitorApp(App):
             self._stop_event.wait(30)
 
     def _gpu_poll_loop(self) -> None:
-        """Background thread: continuously cycle through nodes fetching nvidia-smi."""
         while not self._stop_event.is_set():
             state = self.cluster_state
             if state is None or not state.nodes:
@@ -164,7 +141,7 @@ class SlurmMonitorApp(App):
         if not nodes:
             return 40
         max_name = max(len(n.name) for n in nodes)
-        max_type = max(len(n.gpu_type) for n in nodes)
+        max_type = max(len(n.partition) for n in nodes)
         max_gpus = max(n.total_gpus for n in nodes)
         type_col = (max_type + 4) if max_type > 0 else 0
         min_width = max_name + 4 + type_col + max_gpus + 2
@@ -176,64 +153,71 @@ class SlurmMonitorApp(App):
         if state is None:
             return
 
-        lp = self.query_one("#left-panel")
         needed = self._compute_left_width(state)
-        lp.styles.width = needed
+        if needed != self._left_width:
+            self._left_width = needed
+            lp = self.query_one("#left-panel")
+            lp.styles.width = needed
 
         pw = self.query_one("#priority", PriorityWidget)
-        pw.update(pw.render_content(state, needed))
+        pw.update(pw.render_content(state, self._left_width))
 
         nl = self.query_one("#node-list", NodeListWidget)
         nl.update_nodes(state)
 
-        self.update_detail()
-        self.update_status()
+        self._update_detail_only()
+        self._update_shortcuts()
 
-    def update_detail(self) -> None:
+    def _update_detail_only(self) -> None:
+        """Update only the right panel + nvidia cmd. Lightweight."""
         nl = self.query_one("#node-list", NodeListWidget)
         nd = self.query_one("#node-detail", NodeDetailWidget)
         node = nl.get_selected_node()
         nd.update(nd.render_detail(node, self.current_user))
 
+    def _update_shortcuts(self) -> None:
+        nl = self.query_one("#node-list", NodeListWidget)
         sw = self.query_one("#shortcuts", ShortcutsWidget)
-        has_filter = bool(nl.filter_text)
-        sw.update(sw.render_shortcuts(has_filter))
+        sw.update(sw.render_shortcuts(bool(nl.filter_text)))
 
-        cmd_widget = self.query_one("#nvidia-cmd", Static)
-        if node:
-            t = Text(style=ANSI_BRIGHT_BLACK)
-            t.append(f" ssh {node.name} nvidia-smi")
-            cmd_widget.update(t)
-        else:
-            cmd_widget.update(Text(" (no node selected)", style=ANSI_BRIGHT_BLACK))
-
-    def update_status(self) -> None:
+    def _update_status(self) -> None:
         sb = self.query_one("#status-bar", StatusBarWidget)
         nl = self.query_one("#node-list", NodeListWidget)
-        has_filter = bool(nl.filter_text)
-        sb.update(sb.render_commands(self.filter_mode, self.filter_text, has_filter))
+        sb.update(sb.render_commands(self.filter_mode, self.filter_text,
+                                     bool(nl.filter_text)))
+
+    def _apply_filter(self) -> None:
+        """Apply current filter text to node list and refresh it."""
+        nl = self.query_one("#node-list", NodeListWidget)
+        nl.filter_text = self.filter_text
+        nl.filter_mode = self.filter_mode
+        if self.cluster_state:
+            nl.update_nodes(self.cluster_state)
 
     def on_key(self, event) -> None:
         if self.filter_mode:
             if event.key == "escape":
                 self.filter_mode = ""
                 self.filter_text = ""
-                self._filter_dirty = True
-                self.update_status()
+                self._apply_filter()
+                self._update_status()
+                self._update_shortcuts()
+                self._update_detail_only()
                 event.prevent_default()
                 return
             if event.key == "enter":
                 self.filter_mode = ""
-                self.update_status()
+                self._update_status()
                 event.prevent_default()
                 return
             if event.key == "backspace":
                 self.filter_text = self.filter_text[:-1]
             elif event.is_printable and event.character:
                 self.filter_text += event.character
-            # Only update status bar immediately; filter applied by debounce timer
-            self._filter_dirty = True
-            self.update_status()
+            # Lightweight: only update status bar text per keystroke
+            self._update_status()
+            # Apply filter to node list directly (skip detail panel)
+            self._apply_filter()
             event.prevent_default()
             return
 
@@ -243,7 +227,7 @@ class SlurmMonitorApp(App):
             if self._pending_g:
                 self._pending_g = False
                 nl.move_first()
-                self.update_detail()
+                self._update_detail_only()
             else:
                 self._pending_g = True
             event.prevent_default()
@@ -252,25 +236,25 @@ class SlurmMonitorApp(App):
 
         if event.key in ("j", "down"):
             nl.move_down()
-            self.update_detail()
+            self._update_detail_only()
             event.prevent_default()
         elif event.key in ("k", "up"):
             nl.move_up()
-            self.update_detail()
+            self._update_detail_only()
             event.prevent_default()
         elif event.key == "G":
             nl.move_last()
-            self.update_detail()
+            self._update_detail_only()
             event.prevent_default()
         elif event.key in ("u", "question_mark"):
             self.filter_mode = "user"
             self.filter_text = ""
-            self.update_status()
+            self._update_status()
             event.prevent_default()
         elif event.key in ("n", "slash"):
             self.filter_mode = "node"
             self.filter_text = ""
-            self.update_status()
+            self._update_status()
             event.prevent_default()
         elif event.key == "escape":
             if nl.filter_text:
@@ -279,8 +263,29 @@ class SlurmMonitorApp(App):
                 self.filter_text = ""
                 if self.cluster_state:
                     nl.update_nodes(self.cluster_state)
-                self.update_detail()
-                self.update_status()
+                self._update_detail_only()
+                self._update_status()
+                self._update_shortcuts()
+            event.prevent_default()
+        elif event.key == "c":
+            node = nl.get_selected_node()
+            if node:
+                cmd = f"ssh {node.name} -t python3.11 -m nvitop"
+                encoded = base64.b64encode(cmd.encode()).decode()
+                osc = f"\x1b]52;c;{encoded}\x07"
+                try:
+                    with open("/dev/tty", "w") as tty:
+                        tty.write(osc)
+                        tty.flush()
+                except OSError:
+                    pass
+            event.prevent_default()
+        elif event.key == "m":
+            node = nl.get_selected_node()
+            if node:
+                cmd = ["ssh", node.name, "-t", "python3.11", "-m", "nvitop"]
+                with self.suspend():
+                    subprocess.run(cmd)
             event.prevent_default()
         elif event.key == "q":
             self.exit()

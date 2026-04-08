@@ -40,7 +40,7 @@ class NodeInfo:
     name: str
     state: str = "unknown"
     total_gpus: int = 0
-    gpu_type: str = ""
+    partition: str = ""
     gpus: list[GpuInfo] = field(default_factory=list)
     jobs: list[JobInfo] = field(default_factory=list)
 
@@ -74,21 +74,24 @@ def parse_sinfo(output: str) -> dict[str, NodeInfo]:
     nodes: dict[str, NodeInfo] = {}
     for line in output.strip().splitlines():
         parts = line.split()
-        if len(parts) < 3:
+        if len(parts) < 4:
             continue
         name = parts[0]
         state = parts[1].rstrip("*").lower()
-        gres = parts[2]
+        partition = parts[2].rstrip("*")
+        gres = parts[3]
         total_gpus = 0
-        gpu_type = ""
         m = re.search(r"gpu(?::[^:,(]+)*:(\d+)", gres)
         if m:
             total_gpus = int(m.group(1))
-        # Extract GPU type from e.g. gpu:a100-sxm4-80gb:8(S:0-1)
-        tm = re.search(r"gpu:([^:,(]+):\d+", gres)
-        if tm:
-            gpu_type = tm.group(1)
-        nodes[name] = NodeInfo(name=name, state=state, total_gpus=total_gpus, gpu_type=gpu_type)
+        if name in nodes:
+            # Node in multiple partitions — append partition name
+            existing = nodes[name]
+            if partition not in existing.partition.split(","):
+                existing.partition += f",{partition}"
+        else:
+            nodes[name] = NodeInfo(name=name, state=state, total_gpus=total_gpus,
+                                   partition=partition)
     return nodes
 
 
@@ -184,7 +187,7 @@ def apply_nvidia_smi(state: ClusterState, node_name: str, output: str) -> None:
 
 def refresh_slurm_state(current_user: str) -> ClusterState:
     """Fetch sinfo + squeue and build cluster state. No nvidia-smi."""
-    sinfo_out = run_cmd("sinfo -N -o '%N %T %G' --noheader")
+    sinfo_out = run_cmd("sinfo -N -o '%N %T %P %G' --noheader")
     squeue_out = run_cmd("squeue -o '%i|%u|%P|%N|%b|%T|%Q|%D|%S' --noheader")
 
     nodes = parse_sinfo(sinfo_out)
@@ -210,12 +213,27 @@ def refresh_slurm_state(current_user: str) -> ClusterState:
         is_drain = "drain" in node.state or "down" in node.state
         node.gpus = [GpuInfo(index=i, is_drained=is_drain) for i in range(node.total_gpus)]
         idx = 0
-        for job in sorted(node.jobs, key=lambda j: j.job_id):
-            for _ in range(job.gpu_count):
-                if idx < len(node.gpus):
-                    node.gpus[idx].user = job.user
-                    node.gpus[idx].start_time = job.start_time
-                    idx += 1
+        sorted_jobs = sorted(node.jobs, key=lambda j: j.job_id)
+        # First pass: assign GPUs for jobs with known gpu_count
+        for job in sorted_jobs:
+            if job.gpu_count > 0:
+                for _ in range(job.gpu_count):
+                    if idx < len(node.gpus):
+                        node.gpus[idx].user = job.user
+                        node.gpus[idx].start_time = job.start_time
+                        idx += 1
+        # Second pass: jobs with gpu_count=0 (GRES=N/A) get remaining free GPUs
+        zero_jobs = [j for j in sorted_jobs if j.gpu_count == 0]
+        if zero_jobs:
+            free_gpus = [g for g in node.gpus if g.user is None and not g.is_drained]
+            per_job = max(1, len(free_gpus) // len(zero_jobs)) if free_gpus else 0
+            fi = 0
+            for job in zero_jobs:
+                for _ in range(per_job):
+                    if fi < len(free_gpus):
+                        free_gpus[fi].user = job.user
+                        free_gpus[fi].start_time = job.start_time
+                        fi += 1
 
     pending_jobs.sort(key=lambda j: j.priority, reverse=True)
     return ClusterState(nodes=nodes, pending_jobs=pending_jobs, current_user=current_user)

@@ -9,10 +9,10 @@ def build_demo_state() -> ClusterState:
     user = os.environ.get("USER", "me")
     nodes: dict[str, NodeInfo] = {}
 
-    def _node(name: str, state: str, gpus: list[GpuInfo], gpu_type: str = "a100",
+    def _node(name: str, state: str, gpus: list[GpuInfo], partition: str = "a100",
               jobs: list[JobInfo] | None = None):
         nodes[name] = NodeInfo(name=name, state=state, total_gpus=len(gpus),
-                               gpu_type=gpu_type, gpus=gpus, jobs=jobs or [])
+                               partition=partition, gpus=gpus, jobs=jobs or [])
 
     def _gpu(idx: int, usr: str | None = None, util: int = 0,
              mu: int = 0, mt: int = 81920, drained: bool = False) -> GpuInfo:

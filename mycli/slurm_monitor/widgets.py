@@ -24,7 +24,8 @@ def _format_duration(start: datetime | None) -> str:
     return f"{days}d{hours:02d}h{mins:02d}m"
 
 from .colors import (
-    ANSI_BLACK, ANSI_BLUE, ANSI_BRIGHT_BLACK, ANSI_BRIGHT_WHITE, ANSI_RED, ANSI_WHITE,
+    ANSI_BLACK, ANSI_BLUE, ANSI_BRIGHT_BLACK, ANSI_BRIGHT_WHITE, ANSI_GREEN,
+    ANSI_RED, ANSI_WHITE, ANSI_YELLOW,
     BLOCK, gpu_color, gpu_style, node_sort_key, node_style, render_vram_bar,
 )
 from .data import ClusterState, NodeInfo
@@ -73,9 +74,10 @@ class NodeListWidget(Widget, can_focus=True):
         filtered = all_nodes
         if self.filter_text:
             if self.filter_mode == "user":
+                ft = self.filter_text.lower()
                 filtered = [n for n in all_nodes
-                            if any(self.filter_text.lower() in (j.user or "").lower()
-                                   for j in n.jobs)]
+                            if any(ft in (j.user or "").lower() for j in n.jobs)
+                            or any(ft in (g.user or "").lower() for g in n.gpus)]
             elif self.filter_mode == "node":
                 filtered = [n for n in all_nodes
                             if self.filter_text.lower() in n.name.lower()]
@@ -110,7 +112,7 @@ class NodeListWidget(Widget, can_focus=True):
             self.scroll_offset = self.selected - visible_height + 1
 
         max_name = max(len(n.name) for n in self.sorted_nodes) if self.sorted_nodes else 8
-        max_type = max(len(n.gpu_type) for n in self.sorted_nodes) if self.sorted_nodes else 0
+        max_type = max(len(n.partition) for n in self.sorted_nodes) if self.sorted_nodes else 0
         max_gpus = max(n.total_gpus for n in self.sorted_nodes) if self.sorted_nodes else 4
 
         end = min(self.scroll_offset + visible_height, len(self.sorted_nodes))
@@ -130,7 +132,7 @@ class NodeListWidget(Widget, can_focus=True):
                 blocks.append(" " * pad_blocks, style=bg if bg else "")
 
             COL_GAP = "    "  # 4 spaces between columns
-            type_str = node.gpu_type.ljust(max_type) if max_type > 0 else ""
+            type_str = node.partition.ljust(max_type) if max_type > 0 else ""
             type_col_width = (max_type + len(COL_GAP)) if max_type > 0 else 0
             name_pad = max_name - len(node.name)
             content_width = 1 + name_pad + len(node.name) + len(COL_GAP) + type_col_width + max_gpus
@@ -230,7 +232,25 @@ class NodeDetailWidget(Static):
 
 
 class ShortcutsWidget(Static):
-    """Fixed shortcuts help at the bottom of the right panel."""
+    """Fixed legend + shortcuts help at the bottom of the right panel."""
+
+    CIRCLE = "\u25cf"
+
+    GPU_LEGEND = [
+        (ANSI_WHITE, "current user"),
+        (ANSI_RED, "used (VRAM > 5%)"),
+        (ANSI_GREEN, "used (VRAM \u2264 5%)"),
+        (ANSI_BLUE, "free"),
+        (ANSI_YELLOW, "drained"),
+    ]
+
+    NODE_LEGEND = [
+        (ANSI_WHITE, "has your GPU"),
+        (ANSI_RED, "fully used"),
+        (ANSI_GREEN, "mixed"),
+        (ANSI_BLUE, "all free"),
+        (ANSI_YELLOW, "drained"),
+    ]
 
     SHORTCUTS = [
         ("gg", "go to top"),
@@ -239,15 +259,51 @@ class ShortcutsWidget(Static):
         ("k \u2191", "move up"),
         ("/ n", "search node"),
         ("? u", "search user"),
+        ("m", "open nvitop"),
+        ("c", "copy nvitop cmd"),
         ("esc", "clear filter"),
         ("q", "quit"),
     ]
 
     def render_shortcuts(self, has_filter: bool = False) -> Text:
+        text = Text()
+
+        # Legend
+        gpu_lines = self.GPU_LEGEND
+        node_lines = self.NODE_LEGEND
+        max_rows = max(len(gpu_lines), len(node_lines))
+        gpu_desc_w = max(len(d) for _, d in gpu_lines)
+        # Column widths: " ● desc" for GPU, then gap, " ● desc" for Node
+        gpu_col_w = 2 + gpu_desc_w  # "● " + desc
+
+        # Headers aligned with "● desc" columns: " " + circle(1) + " " = 3 chars before desc
+        gpu_header = " GPU Colors".ljust(gpu_col_w + 1)
+        text.append(gpu_header, style=ANSI_BRIGHT_BLACK)
+        text.append("    ", style=ANSI_BRIGHT_BLACK)
+        text.append("Node Colors\n", style=ANSI_BRIGHT_BLACK)
+
+        for i in range(max_rows):
+            line = Text()
+            if i < len(gpu_lines):
+                color, desc = gpu_lines[i]
+                line.append(f" {self.CIRCLE} ", style=color)
+                line.append(desc.ljust(gpu_desc_w), style=ANSI_BLUE)
+            else:
+                line.append(" " * (gpu_col_w + 1))
+            line.append("    ")
+            if i < len(node_lines):
+                color, desc = node_lines[i]
+                line.append(f"{self.CIRCLE} ", style=color)
+                line.append(desc, style=ANSI_BLUE)
+            text.append_text(line)
+            text.append("\n")
+
+        text.append("\n")
+
+        # Shortcuts
         shortcuts = [(k, d) for k, d in self.SHORTCUTS
                      if k != "esc" or has_filter]
         max_key = max((len(k) for k, _ in shortcuts), default=3)
-        text = Text()
         for key, desc in shortcuts:
             line = Text()
             line.append(f" {key:>{max_key}s}", style=ANSI_BLUE)
