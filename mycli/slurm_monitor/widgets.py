@@ -36,7 +36,7 @@ class PriorityWidget(Static):
 
     def render_content(self, state: ClusterState, width: int) -> Text:
         text = Text()
-        label = Text(" PRIORITY", style=f"bold on {ANSI_BRIGHT_BLACK}")
+        label = Text(" QUEUE", style=f"bold on {ANSI_BRIGHT_BLACK}")
         label.pad_right(width)
         text.append_text(label)
         text.append("\n")

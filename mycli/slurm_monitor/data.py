@@ -33,6 +33,7 @@ class JobInfo:
     priority: int = 0
     num_nodes: int = 1
     start_time: datetime | None = None
+    reason: str = ""
 
 
 @dataclass
@@ -99,10 +100,10 @@ def parse_squeue(output: str) -> list[JobInfo]:
     jobs: list[JobInfo] = []
     for line in output.strip().splitlines():
         parts = line.split("|")
-        if len(parts) < 9:
+        if len(parts) < 10:
             continue
-        job_id, user, partition, nodelist, tres, state, priority, num_nodes, start = (
-            p.strip() for p in parts[:9]
+        job_id, user, partition, nodelist, tres, state, priority, num_nodes, start, reason = (
+            p.strip() for p in parts[:10]
         )
         gpu_count = 0
         m = re.search(r"gpu(?::[^:,(]+)*:(\d+)", tres)
@@ -120,6 +121,7 @@ def parse_squeue(output: str) -> list[JobInfo]:
             priority=int(priority) if priority.isdigit() else 0,
             num_nodes=int(num_nodes) if num_nodes.isdigit() else 1,
             start_time=start_time,
+            reason=reason,
         ))
     return jobs
 
@@ -188,15 +190,15 @@ def apply_nvidia_smi(state: ClusterState, node_name: str, output: str) -> None:
 def refresh_slurm_state(current_user: str) -> ClusterState:
     """Fetch sinfo + squeue and build cluster state. No nvidia-smi."""
     sinfo_out = run_cmd("sinfo -N -o '%N %T %P %G' --noheader")
-    squeue_out = run_cmd("squeue -o '%i|%u|%P|%N|%b|%T|%Q|%D|%S' --noheader")
+    squeue_out = run_cmd("squeue -o '%i|%u|%P|%N|%b|%T|%Q|%D|%S|%r' --noheader")
 
     nodes = parse_sinfo(sinfo_out)
     all_jobs = parse_squeue(squeue_out)
 
-    pending_jobs: list[JobInfo] = []
+    queued_jobs: list[JobInfo] = []
     for job in all_jobs:
-        if job.state == "PENDING":
-            pending_jobs.append(job)
+        if job.state == "PENDING" and job.reason in ("Priority", "Resources"):
+            queued_jobs.append(job)
             continue
         if job.state != "RUNNING":
             continue
@@ -235,5 +237,5 @@ def refresh_slurm_state(current_user: str) -> ClusterState:
                         free_gpus[fi].start_time = job.start_time
                         fi += 1
 
-    pending_jobs.sort(key=lambda j: j.priority, reverse=True)
-    return ClusterState(nodes=nodes, pending_jobs=pending_jobs, current_user=current_user)
+    queued_jobs.sort(key=lambda j: j.priority, reverse=True)
+    return ClusterState(nodes=nodes, pending_jobs=queued_jobs, current_user=current_user)
