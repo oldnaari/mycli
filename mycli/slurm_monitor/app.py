@@ -39,6 +39,7 @@ class SlurmMonitorApp(App):
     }
     #right-panel {
         width: 1fr;
+        margin-left: 1;
     }
     #node-detail {
         height: 1fr;

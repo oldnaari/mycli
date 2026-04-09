@@ -56,7 +56,7 @@ class PriorityWidget(Static):
             col2 = job.user
             is_me = job.user == state.current_user
             style = f"bold {ANSI_BRIGHT_WHITE}" if is_me else ANSI_BRIGHT_WHITE
-            gap = max(1, width - len(col1) - len(col2) - 2)
+            gap = max(1, width - len(col1) - len(col2) - 3)
             line = Text()
             line.append(" " + col1, style=style)
             line.append(" " * gap)
@@ -65,7 +65,7 @@ class PriorityWidget(Static):
             text.append("\n")
 
         if remaining > 0:
-            msg = f"... {remaining} more in queue "
+            msg = f"... {remaining} more in queue  "
             pad = max(0, width - len(msg))
             line = Text()
             line.append(" " * pad)
