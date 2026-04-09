@@ -26,7 +26,7 @@ def _format_duration(start: datetime | None) -> str:
 from .colors import (
     ANSI_BLACK, ANSI_BLUE, ANSI_BRIGHT_BLACK, ANSI_BRIGHT_WHITE, ANSI_GREEN,
     ANSI_RED, ANSI_WHITE, ANSI_YELLOW,
-    BLOCK, gpu_color, gpu_style, node_sort_key, node_style, render_vram_bar,
+    BLOCK, BLOCK_SMALL, gpu_color, gpu_style, node_sort_key, node_style, render_vram_bar,
 )
 from .data import ClusterState, NodeInfo
 
@@ -150,7 +150,7 @@ class NodeListWidget(Widget, can_focus=True):
             blocks = Text()
             for gpu in node.gpus:
                 gc = gpu_style(gpu, self.current_user)
-                blocks.append(BLOCK, style=gc + bg)
+                blocks.append(BLOCK_SMALL, style=gc + bg)
 
             pad_blocks = max_gpus - len(node.gpus)
             if pad_blocks > 0:

@@ -4,7 +4,8 @@ from rich.text import Text
 
 from .data import GpuInfo, NodeInfo
 
-BLOCK = "\u2588"
+BLOCK = "\u25a0"       # ■ black square — used in VRAM bars (right panel)
+BLOCK_SMALL = "\u25aa"  # ▪ small square — used in node list (left panel)
 
 # Standard ANSI colors via Rich's color(N) syntax — bypasses Textual theme
 ANSI_RED = "color(1)"
@@ -87,6 +88,6 @@ def render_vram_bar(pct: float, color: str, width: int = 16) -> Text:
     empty = width - filled
     t = Text()
     t.append(BLOCK * filled, style=ansi)
-    t.append("\u2591" * empty, style=ANSI_BRIGHT_BLACK)
+    t.append(BLOCK * empty, style=ANSI_BRIGHT_BLACK)
     t.append(f" {pct * 100:3.0f}%", style=ansi)
     return t
