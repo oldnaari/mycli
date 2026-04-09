@@ -34,6 +34,8 @@ from .data import ClusterState, NodeInfo
 class PriorityWidget(Static):
     """Non-interactive priority jobs display."""
 
+    MAX_DISPLAY = 15
+
     def render_content(self, state: ClusterState, width: int) -> Text:
         text = Text()
         label = Text(" QUEUE", style=f"bold on {ANSI_BRIGHT_BLACK}")
@@ -41,7 +43,15 @@ class PriorityWidget(Static):
         text.append_text(label)
         text.append("\n")
 
-        for job in state.pending_jobs[:15]:
+        all_jobs = state.pending_jobs
+        # Current user's jobs first, then the rest
+        user_jobs = [j for j in all_jobs if j.user == state.current_user]
+        other_jobs = [j for j in all_jobs if j.user != state.current_user]
+        ordered = user_jobs + other_jobs
+        display = ordered[:self.MAX_DISPLAY]
+        remaining = len(ordered) - len(display)
+
+        for job in display:
             col1 = f"{job.partition} [N-{job.num_nodes} G-{job.gpu_count}]"
             col2 = job.user
             gap = max(1, width - len(col1) - len(col2) - 2)
@@ -49,6 +59,15 @@ class PriorityWidget(Static):
             line.append(" " + col1, style=ANSI_BRIGHT_WHITE)
             line.append(" " * gap)
             line.append(col2 + " ", style=ANSI_BRIGHT_WHITE)
+            text.append_text(line)
+            text.append("\n")
+
+        if remaining > 0:
+            msg = f"(... {remaining} more in queue) "
+            pad = max(0, width - len(msg))
+            line = Text()
+            line.append(" " * pad)
+            line.append(msg, style=ANSI_BLUE)
             text.append_text(line)
             text.append("\n")
 
