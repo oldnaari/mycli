@@ -21,8 +21,9 @@ class FailedJobInfo:
 
 
 class JobTracker:
-    def __init__(self, user: str):
+    def __init__(self, user: str, job_ids: list[str] | None = None):
         self.user = user
+        self.job_ids = set(job_ids) if job_ids else None
         self.known_running: dict[str, JobInfo] = {}
         self._initialized = False
 
@@ -34,10 +35,15 @@ class JobTracker:
         current_jobs = parse_squeue(squeue_out)
         current_running = {j.job_id: j for j in current_jobs if j.state == "RUNNING"}
 
+        if self.job_ids:
+            current_running = {k: v for k, v in current_running.items()
+                               if k in self.job_ids}
+
         if not self._initialized:
             self.known_running = current_running
             self._initialized = True
-            print(f"  Tracking {len(current_running)} running job(s)")
+            ids = ", ".join(sorted(current_running)) if current_running else "none found"
+            print(f"  Tracking {len(current_running)} running job(s): {ids}")
             return []
 
         disappeared = set(self.known_running) - set(current_running)

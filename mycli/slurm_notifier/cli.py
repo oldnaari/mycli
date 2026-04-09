@@ -8,13 +8,13 @@ import time
 from .analyze import FailureAnalyzer
 from .detect import JobTracker
 from .logs import LogFinder
-from .notify import SlackNotifier
+from .notify import Notifier
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="slurm-notifier",
-        description="Monitor SLURM jobs and send Slack notifications on failure.",
+        description="Monitor SLURM jobs and send push notifications on failure.",
     )
     parser.add_argument(
         "--interval", "-i", type=int, default=60,
@@ -29,33 +29,58 @@ def parse_args() -> argparse.Namespace:
         help="Number of log lines to send to Claude for analysis (default: 200)",
     )
     parser.add_argument(
-        "--slack-webhook-url",
-        default=os.environ.get("SLACK_WEBHOOK_URL"),
-        help="Slack webhook URL (or set SLACK_WEBHOOK_URL env var)",
+        "--ntfy-topic",
+        default=os.environ.get("NTFY_TOPIC"),
+        help="ntfy.sh topic name (or set NTFY_TOPIC env var)",
+    )
+    parser.add_argument(
+        "--job", "-j", nargs="+",
+        help="Track specific job ID(s) instead of all running jobs",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="Print notifications to stdout instead of sending to Slack",
+        help="Print notifications to stdout instead of sending",
+    )
+    parser.add_argument(
+        "--bash-init", action="store_true",
+        help="Print bash completion script and exit. Usage: eval \"$(slurm-notifier --bash-init)\"",
     )
     return parser.parse_args()
+
+
+_BASH_COMPLETION = """\
+_slurm_notifier() {
+    local cur prev
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    if [[ "$prev" == "-j" || "$prev" == "--job" ]]; then
+        COMPREPLY=($(compgen -W "$(squeue -u $USER -h -o '%i' 2>/dev/null)" -- "$cur"))
+    fi
+}
+complete -F _slurm_notifier slurm-notifier
+"""
 
 
 def main():
     args = parse_args()
 
-    if not args.dry_run and not args.slack_webhook_url:
+    if args.bash_init:
+        print(_BASH_COMPLETION)
+        return
+
+    if not args.dry_run and not args.ntfy_topic:
         print(
-            "Error: --slack-webhook-url or SLACK_WEBHOOK_URL env var required "
+            "Error: --ntfy-topic or NTFY_TOPIC env var required "
             "(or use --dry-run)",
             file=sys.stderr,
         )
         sys.exit(1)
 
     user = os.environ.get("USER", "unknown")
-    tracker = JobTracker(user=user)
+    tracker = JobTracker(user=user, job_ids=args.job)
     log_finder = LogFinder(args.log_dir, args.tail_lines)
     analyzer = FailureAnalyzer()
-    notifier = SlackNotifier(args.slack_webhook_url, dry_run=args.dry_run)
+    notifier = Notifier(args.ntfy_topic, dry_run=args.dry_run)
 
     print(f"slurm-notifier started (user={user}, interval={args.interval}s)")
 
