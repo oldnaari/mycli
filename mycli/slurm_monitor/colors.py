@@ -5,7 +5,7 @@ from rich.text import Text
 from .data import GpuInfo, NodeInfo
 
 BLOCK = "\u25a0"       # ■ black square — used in VRAM bars (right panel)
-BLOCK_SMALL = "\u25aa"  # ▪ small square — used in node list (left panel)
+BLOCK_SMALL = "\u25ae"  # ▮ vertical rectangle — used in node list (left panel)
 
 # Standard ANSI colors via Rich's color(N) syntax — bypasses Textual theme
 ANSI_RED = "color(1)"
