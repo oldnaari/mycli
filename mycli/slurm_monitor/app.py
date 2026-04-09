@@ -32,7 +32,7 @@ class SlurmMonitorApp(App):
     }
     #priority {
         height: auto;
-        max-height: 12;
+        max-height: 16;
     }
     #node-list {
         height: 1fr;
