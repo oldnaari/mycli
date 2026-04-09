@@ -33,21 +33,21 @@ class JobTracker:
             f"squeue -u {self.user} -o '%i|%u|%P|%N|%b|%T|%Q|%D|%S' --noheader"
         )
         current_jobs = parse_squeue(squeue_out)
-        current_running = {j.job_id: j for j in current_jobs if j.state == "RUNNING"}
+        active = {j.job_id: j for j in current_jobs
+                  if j.state in ("RUNNING", "PENDING")}
 
         if self.job_ids:
-            current_running = {k: v for k, v in current_running.items()
-                               if k in self.job_ids}
+            active = {k: v for k, v in active.items() if k in self.job_ids}
 
         if not self._initialized:
-            self.known_running = current_running
+            self.known_running = active
             self._initialized = True
-            ids = ", ".join(sorted(current_running)) if current_running else "none found"
-            print(f"  Tracking {len(current_running)} running job(s): {ids}")
+            ids = ", ".join(sorted(active)) if active else "none found"
+            print(f"  Tracking {len(active)} active job(s): {ids}")
             return []
 
-        disappeared = set(self.known_running) - set(current_running)
-        self.known_running = current_running
+        disappeared = set(self.known_running) - set(active)
+        self.known_running = active
 
         if not disappeared:
             return []
