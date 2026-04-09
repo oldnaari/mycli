@@ -259,8 +259,6 @@ class NodeDetailWidget(Static):
 class ShortcutsWidget(Static):
     """Fixed legend + shortcuts help at the bottom of the right panel."""
 
-    CIRCLE = "\u25cf"
-
     GPU_LEGEND = [
         (ANSI_WHITE, "current user"),
         (ANSI_RED, "used (VRAM > 5%)"),
@@ -298,28 +296,27 @@ class ShortcutsWidget(Static):
         gpu_lines = self.GPU_LEGEND
         node_lines = self.NODE_LEGEND
         max_rows = max(len(gpu_lines), len(node_lines))
-        gpu_desc_w = max(len(d) for _, d in gpu_lines)
-        # Column widths: " ● desc" for GPU, then gap, " ● desc" for Node
-        gpu_col_w = 2 + gpu_desc_w  # "● " + desc
+        node_desc_w = max(len(d) for _, d in node_lines)
+        # Column widths: " Aa desc" for Node, then gap, " ▮ desc" for GPU
+        node_col_w = 3 + node_desc_w  # "Aa " + desc
 
-        # Headers aligned with "● desc" columns: " " + circle(1) + " " = 3 chars before desc
-        gpu_header = " GPU Colors".ljust(gpu_col_w + 1)
-        text.append(gpu_header, style=ANSI_BRIGHT_BLACK)
+        node_header = " Node Colors".ljust(node_col_w + 1)
+        text.append(node_header, style=ANSI_BRIGHT_BLACK)
         text.append("    ", style=ANSI_BRIGHT_BLACK)
-        text.append("Node Colors\n", style=ANSI_BRIGHT_BLACK)
+        text.append("GPU Colors\n", style=ANSI_BRIGHT_BLACK)
 
         for i in range(max_rows):
             line = Text()
-            if i < len(gpu_lines):
-                color, desc = gpu_lines[i]
-                line.append(f" {self.CIRCLE} ", style=color)
-                line.append(desc.ljust(gpu_desc_w), style=ANSI_BLUE)
-            else:
-                line.append(" " * (gpu_col_w + 1))
-            line.append("    ")
             if i < len(node_lines):
                 color, desc = node_lines[i]
-                line.append(f"{self.CIRCLE} ", style=color)
+                line.append(" Aa ", style=color)
+                line.append(desc.ljust(node_desc_w), style=ANSI_BLUE)
+            else:
+                line.append(" " * (node_col_w + 1))
+            line.append("    ")
+            if i < len(gpu_lines):
+                color, desc = gpu_lines[i]
+                line.append(f"{BLOCK_SMALL}{BLOCK_SMALL} ", style=color)
                 line.append(desc, style=ANSI_BLUE)
             text.append_text(line)
             text.append("\n")
